@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.egg-info/
+.venv/
+venv/
+
+# 构建产物
+build/
+dist/
+*.spec
+build_nuitka/
+build_fullpy/
+
+# 本机工具链与历史快照(体积大, 不入库)
+katagomo_tmp/
+快照/
+
+# 日志
+*.log
+selftest_result.txt
+
+# 编辑器
+.vscode/
+.idea/
