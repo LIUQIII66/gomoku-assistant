@@ -41,7 +41,7 @@
 3. 引擎立刻算出你的最佳应手，**红圈标记**在棋盘上
 4. 照着下，循环往复
 
-引擎决策链：**直接成五 → 堵对方成五 → 我方连续冲四算杀（VCF）→ 拆解对方算杀 → 开局库 → PVS 迭代加深搜索**（置换表 + Zobrist 哈希 + 增量评估 + 融合棋型评分）。
+引擎决策链：**直接成五 → 堵对方成五 → 开局库 → PVS 迭代加深搜索**（置换表 + Zobrist 哈希 + 增量评估 + 融合棋型评分）；VCF 连续冲四算杀在残局阶段（盘面接近落满）启用。
 
 ## ✨ 功能特性
 
@@ -54,7 +54,7 @@
 
 ## ⚠️ 已知缺点与局限（诚实清单）
 
-1. **深层连续冲杀（VCT）视野有限**：每步 2 秒约搜索 5~6 层，对 5 步以上连续连杀的防守可能不完美（VCT 已列入计划）
+1. **中盘攻防依赖 α-β 搜索**：VCF 连续冲四算杀目前仅在残局（空位较少）时启用——实测把 VCF 提前到中盘**两次实验均回退**（A/B 4:8 与 4:12，合并 28 局 p≈.018 显著变弱），且机制上存在明确缺陷：浅层算杀会短路更深的搜索、且当前 VCF 实现看不穿防守方的独立反击链。彻底解法是把战术检测结果注入搜索由深搜终裁、并实现带反击感知的 VCT（已列入计划）。同理，5 步以上连续连杀的防守可能不完美。
 2. **棋力定位**：经典搜索 + 人工棋型评估，属"业余高水平"，明显低于 Rapfi / KataGomo 等顶级 AI（那些依赖神经网络，本项目刻意不用）
 3. **仅支持无禁手规则**与 **15×15 标准棋盘**
 4. **开局库仅覆盖前 5 手**
@@ -62,7 +62,7 @@
 
 ## 🚀 快速开始
 
-**下载即用（推荐）**：到 **[Releases](../../releases)** 下载 `五子棋对局助手.exe`，双击运行（免安装，无需 Python）。exe 内含 Nuitka 编译引擎与开局库，与作者自用版本完全一致。
+**下载即用（推荐）**：到 **[Releases](../../releases)** 下载 `GomokuAssistant-v1.0.exe`，双击运行（免安装，无需 Python）。exe 内含 Nuitka 编译引擎与开局库，与作者自用版本完全一致。
 
 **从源码运行**：Windows + Python 3.8 以上，纯标准库零依赖：
 
@@ -87,7 +87,7 @@ Esc 退出 · 日志在 `文档\五子棋对局助手日志\`（新开局自动�
 
 ## 📦 仓库文件
 
-`gomoku.py`（界面层）· `gomoku_engine.py`（引擎）· `gomoku_opening_book.json`（开局库）· `build_exe.bat`（构建脚本示例）· `LICENSE` · `images/`
+`gomoku.py`（界面层）· `gomoku_engine.py`（引擎）· `gomoku_opening_book.json`（开局库）· `DECISIONS.md`（决策档案：每项采纳/否决的证据与教训）· `build_exe.bat`（构建脚本示例）· `LICENSE` · `images/`
 
 ## 🤖 AI 辅助开发声明
 
@@ -95,7 +95,7 @@ Esc 退出 · 日志在 `文档\五子棋对局助手日志\`（新开局自动�
 
 ## 📚 致谢
 
-开局库由 **[KataGomo](https://github.com/hzyhhzy/KataGomo)**（基于 [KataGo](https://github.com/lightvector/KataGo)，MIT License）离线分析生成。搜索设计参考 Gomocup 社区公开资料（Rapfi、Embryo、Carbon）与 Allis 的威胁空间搜索论文，未使用其任何源代码。
+开局库由 **[KataGomo](https://github.com/hzyhhzy/KataGomo)**（基于 [KataGo](https://github.com/lightvector/KataGo)，MIT License）离线分析生成。内嵌的开局库文件（gomoku_opening_book.json）由 hzyhhzy 的 KataGomo（KataGo 衍生引擎，原作者 David J. Wu (lightvector) 等）离线生成，依其项目的 MIT 风格许可使用，版权归原项目作者。搜索设计参考 Gomocup 社区公开资料（Rapfi、Embryo、Carbon）与 Allis 的威胁空间搜索论文，未使用其任何源代码。
 
 ## ⚠️ 免责声明
 
@@ -128,7 +128,7 @@ Author's record using this tool (8 straight wins in one day):
 3. The engine instantly shows its recommended reply, marked with a **red circle**
 4. Play that move and repeat
 
-Decision pipeline: **win-in-one → block opponent's five → own VCF search → break opponent's VCF → opening book → PVS iterative-deepening search** (transposition table + Zobrist hashing + incremental evaluation + fused pattern scoring).
+Decision pipeline: **win-in-one → block opponent's five → opening book → PVS iterative-deepening search** (transposition table + Zobrist hashing + incremental evaluation + fused pattern scoring). VCF continuous-four forced-win search activates in the late game (when the board is nearly full).
 
 ## ✨ Features
 
@@ -141,7 +141,7 @@ Decision pipeline: **win-in-one → block opponent's five → own VCF search →
 
 ## ⚠️ Known Limitations (honest list)
 
-1. **Shallow VCT vision**: at ~5–6 plies/2 s, defenses against 5+ ply forced sequences may be imperfect (VCT on the roadmap)
+1. **Midgame tactics rely on α-β search**: the VCF continuous-four search currently runs only in the late game (few empty cells). Moving it into the midgame was tested twice and *reverted both times* (A/B 4:8 and 4:12, combined n=28 p≈.018) because our VCF can't see defender counter-chains and mis-verifies wins; the proper fix is a counter-aware VCT (planned). Defenses vs 5+ ply forced sequences may be imperfect.
 2. **Strength level**: classic search + handcrafted evaluation ("strong amateur"); clearly below neural engines like Rapfi/KataGomo (intentionally not used here)
 3. **Freestyle (no-forbidden-rules) Gomoku only**, 15×15 board only
 4. **Opening book covers only the first 5 plies**
@@ -149,7 +149,7 @@ Decision pipeline: **win-in-one → block opponent's five → own VCF search →
 
 ## 🚀 Quick Start
 
-**Portable (recommended)**: download `五子棋对局助手.exe` from **[Releases](../../releases)** — no installation, no Python required. It embeds the Nuitka-compiled engine and the opening book, identical to the author's own build.
+**Portable (recommended)**: download `GomokuAssistant-v1.0.exe` from **[Releases](../../releases)** — no installation, no Python required. It embeds the Nuitka-compiled engine and the opening book, identical to the author's own build.
 
 **From source**: Windows + Python 3.8+, pure standard library, zero dependencies:
 
@@ -174,7 +174,7 @@ Esc quits · logs saved to `Documents\五子棋对局助手日志\` · self-test
 
 ## 📦 Repository Files
 
-`gomoku.py` (UI) · `gomoku_engine.py` (engine) · `gomoku_opening_book.json` (book) · `build_exe.bat` (build example) · `LICENSE` · `images/`
+`gomoku.py` (UI) · `gomoku_engine.py` (engine) · `gomoku_opening_book.json` (book) · `DECISIONS.md` (decision archive: evidence & lessons behind every adopt/reject) · `build_exe.bat` (build example) · `LICENSE` · `images/`
 
 ## 🤖 AI-Assisted Development Statement
 
@@ -182,7 +182,7 @@ Product direction, decision-chain design and final trade-offs by the human autho
 
 ## 📚 Acknowledgements
 
-Opening book generated offline with **[KataGomo](https://github.com/hzyhhzy/KataGomo)** (based on [KataGo](https://github.com/lightvector/KataGo), MIT License). Search design informed by public Gomocup community material (Rapfi, Embryo, Carbon) and L. V. Allis's threat-space search papers — no third-party source code is used.
+Opening book generated offline with **[KataGomo](https://github.com/hzyhhzy/KataGomo)** (based on [KataGo](https://github.com/lightvector/KataGo), MIT License). The bundled opening book file (gomoku_opening_book.json) was generated offline by hzyhhzy's KataGomo (a KataGo-derived Gomoku engine, original authors David J. Wu (lightvector) et al.) and is used under that project's MIT-style license; copyright belongs to its original authors. Search design informed by public Gomocup community material (Rapfi, Embryo, Carbon) and L. V. Allis's threat-space search papers — no third-party source code is used.
 
 ## 📄 License
 

@@ -37,9 +37,8 @@ echo [3/4] Self-test the packaged exe (results are written to the log folder)...
 ".\dist\gomoku-assistant.exe" --selftest
 echo     Check Documents\gomoku logs\selftest_result.txt: it should end with 0 failures.
 
-echo [4/4] Done. Built exe is in .\dist\
+echo [4/4] Done. Built exe is in .\dist\ (kept for Release upload)
 rmdir /s /q build 2>nul
-rmdir /s /q dist 2>nul
 del /q gomoku-assistant.spec 2>nul
 echo BUILD OK
 exit /b 0

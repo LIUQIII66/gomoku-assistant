@@ -19,12 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Third-party notices / 第三方致谢:
-
-The bundled opening book (gomoku_opening_book.json) was generated offline by
-KataGomo (https://github.com/hzyhhzy/KataGomo), a KataGo-derived Gomoku engine
-by hzyhhzy, based on KataGo by David J. Wu (lightvector) and other authors,
-used under the MIT-style license reproduced from that project's LICENSE file.
