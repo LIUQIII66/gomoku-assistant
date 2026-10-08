@@ -40,9 +40,9 @@ def double_win(board, r, c, player):
     return len(win_points_after(board,r,c,player)) >= 2
 
 def _near_stone(board,r,c):
-    for dr,dc in ((1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1),(2,0),(-2,0),(0,2),(0,-2)):
-        rr=r+dr; cc=c+dc
-        if 0<=rr<SIZE and 0<=cc<SIZE and board[rr][cc]!=0:
+    # 用预计算邻接表(性能轮1): 8斜邻+4 orth距离2, 与原偏移表一致
+    for (rr,cc) in _NEIGH[r][c]:
+        if board[rr][cc]!=0:
             return True
     return False
 
@@ -73,42 +73,57 @@ def _affected_points(r,c):
     pts.add((r,c))
     return pts
 
+# ---- 预计算几何表(模块加载时一次构建; 性能轮1: 消除热路径边界判断与切片分配) ----
+_LINE9 = [[None]*SIZE for _ in range(SIZE)]   # [r][c] = 4方向 x 9格坐标(越界为None)
+_NEIGH = [[None]*SIZE for _ in range(SIZE)]   # [r][c] = 近子判定偏移(8斜邻+4 orth距离2)
+_NEIGH_OFFS = ((1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1),(2,0),(-2,0),(0,2),(0,-2))
+for _r in range(SIZE):
+    for _c in range(SIZE):
+        _dirs = []
+        for _dr, _dc in DIRS:
+            _cells = []
+            for _k in range(-4, 5):
+                _rr = _r + _dr*_k; _cc = _c + _dc*_k
+                _cells.append((_rr, _cc) if 0 <= _rr < SIZE and 0 <= _cc < SIZE else None)
+            _dirs.append(tuple(_cells))
+        _LINE9[_r][_c] = tuple(_dirs)
+        _nb = []
+        for _dr, _dc in _NEIGH_OFFS:
+            _rr = _r + _dr; _cc = _c + _dc
+            if 0 <= _rr < SIZE and 0 <= _cc < SIZE:
+                _nb.append((_rr, _cc))
+        _NEIGH[_r][_c] = tuple(_nb)
+
 def _both_tiers(board, r, c):
     """空点(r,c)分别落黑/落白后的棋型分, 与
     (pattern_tier(board,r,c,1), pattern_tier(board,r,c,2)) 严格一致。
-    单趟融合: 每方向只建一次线, 按双方棋子数跳过不可能有结果的扫描(性能热点,治于profile)。"""
-    out = [[], []]   # 每玩家: [fivepts集合引用, dir_best]
+    单趟融合+预计算几何表+免切片窗口扫描(性能轮1, 4800点等价验证)。"""
     five = [set(), set()]
     best = [0, 0]
-    for dr, dc in DIRS:
-        line = []; coords = []
-        c1 = c2 = 0
-        for k in range(-4, 5):
-            rr = r + dr*k; cc = c + dc*k
-            if 0 <= rr < SIZE and 0 <= cc < SIZE:
-                v = board[rr][cc]
-                line.append(v); coords.append((rr, cc))
-                if v == 1: c1 += 1
-                elif v == 2: c2 += 1
-            else:
-                line.append(-1); coords.append(None)
-        # 单趟双算: 每个窗口同时为黑白双方评分(玩家在该方向棋子数为0则跳过; <3 不可能有成五点)
+    line9 = _LINE9[r][c]
+    for d in range(4):
+        cells = line9[d]
+        # 构建9格线(墙=-1): 列表推导在编译态比手工 append 更快且无边界判断
+        line = [-1 if p is None else board[p[0]][p[1]] for p in cells]
+        c1 = line.count(1); c2 = line.count(2)
+        # 单趟双算: 玩家在该方向棋子数为0则跳过; <3 不可能有成五点
         do1 = c1 >= 1; do2 = c2 >= 1
-        five1 = c1 >= 3; five2 = c2 >= 3
         if not (do1 or do2): continue
-        for i in range(5):
-            seg = line[i:i+5]
-            if -1 in seg: continue
-            c1s = seg.count(1); c2s = seg.count(2)
-            left_open = (i-1 >= 0 and line[i-1] == 0)
-            right_open = (i+5 < 9 and line[i+5] == 0)
-            opens = int(left_open) + int(right_open)
+        five1 = c1 >= 3; five2 = c2 >= 3
+        for i in (0, 1, 2, 3, 4):
+            w0 = line[i]; w1 = line[i+1]; w2 = line[i+2]; w3 = line[i+3]; w4 = line[i+4]
+            if w0 < 0 or w1 < 0 or w2 < 0 or w3 < 0 or w4 < 0: continue   # 含墙窗口
+            c1s = (w0==1) + (w1==1) + (w2==1) + (w3==1) + (w4==1)
+            c2s = (w0==2) + (w1==2) + (w2==2) + (w3==2) + (w4==2)
+            opens = 0
+            if i > 0 and line[i-1] == 0: opens += 1
+            if i+5 < 9 and line[i+5] == 0: opens += 1
             # 玩家1(对方子=2 出现则该窗无效)
             if do1 and c2s == 0:
                 if five1 and c1s == 3:
-                    for j in range(5):
-                        if seg[j] == 0 and (i+j) != 4:   # 落点自身不计(虚拟落子后它已是己子)
-                            five[0].add(coords[i+j]); break
+                    for j in (0, 1, 2, 3, 4):
+                        if line[i+j] == 0 and (i+j) != 4:   # 落点自身不计(虚拟落子后它已是己子)
+                            five[0].add(cells[i+j]); break
                 cnt = c1s + 1   # 落点计入(与 _line_pattern_score 的 line[4]!=player 语义一致)
                 if cnt >= 2:
                     if cnt >= 5: t = FIVE    # 落子即成五的点必须最高分, 否则会掉出候选表(治:堵五/制胜点不可见)
@@ -120,9 +135,9 @@ def _both_tiers(board, r, c):
             # 玩家2(对方子=1 出现则该窗无效)
             if do2 and c1s == 0:
                 if five2 and c2s == 3:
-                    for j in range(5):
-                        if seg[j] == 0 and (i+j) != 4:
-                            five[1].add(coords[i+j]); break
+                    for j in (0, 1, 2, 3, 4):
+                        if line[i+j] == 0 and (i+j) != 4:
+                            five[1].add(cells[i+j]); break
                 cnt = c2s + 1
                 if cnt >= 2:
                     if cnt >= 5: t = FIVE    # 落子即成五的点必须最高分
@@ -131,12 +146,14 @@ def _both_tiers(board, r, c):
                     elif cnt == 2: t = LIVE2 if opens == 2 else SLEEP2
                     else: t = 0
                     if t > best[1]: best[1] = t
-    for p in (1, 2):
-        n = len(five[p-1])
-        if n >= 2: out[p-1] = LIVE4
-        elif n == 1: out[p-1] = FOUR
-        else: out[p-1] = best[p-1]
-    return out[0], out[1]
+    res = []
+    for p in (0, 1):
+        n = len(five[p])
+        if best[p] >= FIVE: res.append(FIVE)      # 落子即成五: 最高优先(2026-10-08B2修, 与 pattern_tier 同步)
+        elif n >= 2: res.append(LIVE4)
+        elif n == 1: res.append(FOUR)
+        else: res.append(best[p])
+    return res[0], res[1]
 
 def _recompute_pt(board,r,c):
     """重算空点(r,c)的两方即时分并写回缓存; 同步维护全局战术分累加值。"""
@@ -206,14 +223,30 @@ def eval_board(board, me):
 def candidates(board):
     cand=[]
     for r in range(SIZE):
+        prow=board[r]
+        nrow=_NEIGH[r]
         for c in range(SIZE):
-            if board[r][c]==0 and _near_stone(board,r,c):
-                a,d=_PTS[r][c]
-                cand.append((a+d,r,c))
+            if prow[c]==0:
+                for (qr,qc) in nrow[c]:
+                    if board[qr][qc]!=0:
+                        a,d=_PTS[r][c]
+                        cand.append((a+d,r,c))
+                        break
     if not cand:
         return [(7,7)] if board[7][7]==0 else [(7,8)]
     cand.sort(key=lambda x:-x[0])
     return [(r,c) for _,r,c in cand[:_CAND_LIMIT]]
+
+def _any_four_point(player):
+    """盘上是否存在'落子能成四(含以上)'的空点 —— VCF 阶段(E)的 O(225) 预检。
+    依赖 _init_eval 建立的 _PTS 缓存; 无此点则 VCF 必不成立, 无需烧时间。"""
+    i=player-1
+    for r in range(SIZE):
+        row=_PTS[r]
+        for c in range(SIZE):
+            if row[c][i]>=FOUR:
+                return True
+    return False
 
 def has_win_at(board,p,r,c):
     """只检查经过(r,c)是否有p的五连(增量胜负判断, 比全盘has_win快)。"""
@@ -249,6 +282,10 @@ class _Timeout(Exception): pass
 # (B)跨回合不清空, 加容量上限+按深度优先替换
 _TT={}
 _TT_MAX=2_000_000
+_TT_ISOLATE=False   # 复核隔离(2026-10-08 补全双向): True 时 _search 对 TT 不读也不写。
+                    # 不写: 窄窗口 bound 不得毒化主搜索(防 E 实验发现的写方向毒化);
+                    # 不读: 复核不得复用主搜索在被测子树自写的 bound(裁判不得引用被告证词)。
+                    # 代价: 复核变慢 -> 更易触发 level2/3 降级(守卫偏严, 不误杀由夹具监控)。
 _KILLER=[None,None]   # 每层一个最佳着法(killer heuristic)
 _HIST=[[0]* (SIZE*SIZE) for _ in range(3)]  # history heuristic: _HIST[player][r*SIZE+c] 累计剪枝成功着法
 
@@ -293,12 +330,13 @@ def _search(board, me, depth, alpha, beta, hsh):
         return eval_board(board,me)
     op=3-me
     tt_best=None
-    ent=_TT.get((hsh,depth))
-    if ent is not None:
-        val,flag,_d,tt_best=ent
-        if flag==0: return val
-        if flag==1 and val>=beta: return val
-        if flag==-1 and val<=alpha: return val
+    if not _TT_ISOLATE:
+        ent=_TT.get((hsh,depth))
+        if ent is not None:
+            val,flag,_d,tt_best=ent
+            if flag==0: return val
+            if flag==1 and val>=beta: return val
+            if flag==-1 and val<=alpha: return val
     best=-10**9
     orig_alpha=alpha
     best_mv=None
@@ -308,21 +346,27 @@ def _search(board, me, depth, alpha, beta, hsh):
         if _DEADLINE is not None and _tm.time()>_DEADLINE:
             raise _Timeout()
         info=_apply_move(board,r,c,me)   # 增量落子(含评估更新)
-        nh=hsh^_ZOBRIST[r*SIZE+c][me]
-        if has_win_at(board,me,r,c):     # 我这手直接赢
+        # 超时安全(2026-10-08B, #38样本parity异常定位): 递归 _Timeout 穿出时必须撤销本手,
+        # 否则整条 pv 线的未撤销落子会污染 best_move 后续深度迭代与复核(脏盘上验证"必胜")。
+        win_now=False; v=None
+        try:
+            nh=hsh^_ZOBRIST[r*SIZE+c][me]
+            if has_win_at(board,me,r,c):     # 我这手直接赢
+                win_now=True
+            elif first:
+                v=-_search(board,op,depth-1,-beta,-alpha,nh)
+                first=False
+            else:
+                # PVS: 零窗口试探, 失败高位补全窗口
+                v=-_search(board,op,depth-1,-alpha-1,-alpha,nh)
+                if alpha < v < beta:
+                    v=-_search(board,op,depth-1,-beta,-alpha,nh)
+        finally:
             _undo_move(board,info)
+        if win_now:
             best=WIN_SCORE+depth; best_mv=(r,c)
             alpha=max(alpha,best)
             break
-        # PVS: 首着全窗口, 其余零窗口试探(着法排序质量高时省大量节点); 试探失败高位再补全窗口
-        if first:
-            v=-_search(board,op,depth-1,-beta,-alpha,nh)
-            first=False
-        else:
-            v=-_search(board,op,depth-1,-alpha-1,-alpha,nh)
-            if alpha < v < beta:
-                v=-_search(board,op,depth-1,-beta,-alpha,nh)
-        _undo_move(board,info)
         if v>best:
             best=v; best_mv=(r,c)
             if v>alpha:
@@ -337,13 +381,14 @@ def _search(board, me, depth, alpha, beta, hsh):
             if v == best:
                 _HIST[me][r*SIZE+c] += 1
     # 存TT: flag 0=exact, 1=lowerbound(剪枝), -1=upperbound
-    old=_TT.get((hsh,depth))
-    if old is None or old[2]<=depth:   # depth-preferred 替换
-        if best>=beta: flag=1
-        elif best<=orig_alpha: flag=-1
-        else: flag=0
-        _TT[(hsh,depth)]=(best,flag,depth,best_mv)
-    _tt_maybe_trim()
+    if not _TT_ISOLATE:
+        old=_TT.get((hsh,depth))
+        if old is None or old[2]<=depth:   # depth-preferred 替换
+            if best>=beta: flag=1
+            elif best<=orig_alpha: flag=-1
+            else: flag=0
+            _TT[(hsh,depth)]=(best,flag,depth,best_mv)
+        _tt_maybe_trim()
     return best
 
 def _winning_points(board, player, _check=False):
@@ -435,14 +480,17 @@ def _line_pattern_score(board,r,c,player):
 
 def pattern_tier(board, r, c, player):
     """落子(r,c)后的棋型等级。先看成五点集合(活四/冲四), 再用跳空窗口评活三/活二等。"""
+    lp = _line_pattern_score(board,r,c,player)
+    if lp >= FIVE:
+        return FIVE   # 落子即成五(2026-10-08B2修): 此前一端可延伸的成五点会被 win_points_after
+                      # 的延伸点误归为 FOUR(如实战误案: 斜四补口后线尾还有一空->wp={尾}->判冲四)
     wp=win_points_after(board,r,c,player)
     n=len(wp)
     if n>=2:
         return LIVE4          # 两个及以上成五点 = 活四/双杀级(必胜)
     if n==1:
         return FOUR           # 单成五点 = 冲四(急)
-    # 没有直接成五点: 用跳空窗口评估活三/眠三/活二(修复跳空三被评成1分的下偏)
-    return _line_pattern_score(board,r,c,player)
+    return lp
 
 def _four_points(board, player, _check=False):
     """返回所有'落子后能制造成五点(含跳空冲四)'的点 —— 供VCF枚举, 基于成五点集合(治④根)。
@@ -458,7 +506,9 @@ def _four_points(board, player, _check=False):
     return pts
 
 def vcf_search(board, attacker, defender, depth=6):
-    """VCF: 攻击方连续冲四/做杀能否强制取胜。返回获胜第一步或None。"""
+    """VCF: 攻击方连续冲四/做杀能否强制取胜。返回获胜第一步或None。
+    超时安全(2026-10-07复查修): 所有临时落子用 try/finally 撤销 ——
+    扫描过期抛出的 _Timeout 穿出时不会在盘上残留'幽灵子'。"""
     def rec(bd, atk, dep):
         if dep<=0 or (_DEADLINE is not None and _tm.time()>_DEADLINE):
             return False
@@ -468,28 +518,29 @@ def vcf_search(board, attacker, defender, depth=6):
         # 否则走冲四逼招: 对每个能造出'对方必应'的冲四点
         for (r,c) in _four_points(bd,atk,_check=True):
             bd[r][c]=atk
-            # 防守方强应点 = 攻击方的成五点集合
-            must=_winning_points(bd,atk,_check=True)
-            distinct = set(must)
-            if len(distinct)>=2 and len(must)>=2:
-                # 双杀式冲四: 同一手造出>=2个不同位置的成五点, 防守方一子挡不完 -> 必胜
-                bd[r][c]=0
-                return True
-            if must:
-                # 单成五点: 防守方唯一应招就是堵它; 逐个试挡所有成五点, 任一种挡完攻击方仍有强制胜即成立
-                blocked_all=True
-                for br,bc in must:
-                    bd[br][bc]=3-atk
-                    # 防守方反击: 堵子这一手若同时形成己方冲四(成五威胁), 攻击链被打断(保守处理, 杜绝误报必胜)
-                    if win_points_after(bd, br, bc, 3-atk):
-                        blocked_all=False; bd[br][bc]=0; break
-                    sub=rec(bd,atk,dep-1)
-                    bd[br][bc]=0
-                    if not sub:
-                        blocked_all=False; break
-                bd[r][c]=0
-                if blocked_all: return True
-            else:
+            try:
+                # 防守方强应点 = 攻击方的成五点集合
+                must=_winning_points(bd,atk,_check=True)
+                distinct = set(must)
+                if len(distinct)>=2 and len(must)>=2:
+                    # 双杀式冲四: 同一手造出>=2个不同位置的成五点, 防守方一子挡不完 -> 必胜
+                    return True
+                if must:
+                    # 单成五点: 防守方唯一应招就是堵它; 逐个试挡所有成五点, 任一种挡完攻击方仍有强制胜即成立
+                    blocked_all=True
+                    for br,bc in must:
+                        bd[br][bc]=3-atk
+                        try:
+                            # 防守方反击: 堵子这一手若同时形成己方冲四(成五威胁), 攻击链被打断(保守处理, 杜绝误报必胜)
+                            if win_points_after(bd, br, bc, 3-atk):
+                                blocked_all=False; break
+                            sub=rec(bd,atk,dep-1)
+                        finally:
+                            bd[br][bc]=0
+                        if not sub:
+                            blocked_all=False; break
+                    if blocked_all: return True
+            finally:
                 bd[r][c]=0
         return False
     # 尝试攻击方每个候选作为VCF第一手
@@ -497,14 +548,17 @@ def vcf_search(board, attacker, defender, depth=6):
         if _DEADLINE is not None and _tm.time()>_DEADLINE:
             break
         board[r][c]=attacker
-        win=rec(board, attacker, depth)
-        board[r][c]=0
+        try:
+            win=rec(board, attacker, depth)
+        finally:
+            board[r][c]=0
         if win:
             return (r,c)
     return None
 
 def _opponent_has_forcing_win(board, op, depth=6):
-    """检测对方(op)是否存在VCF强制取胜。返回True/False。"""
+    """检测对方(op)是否存在VCF强制取胜。返回True/False。
+    超时安全: 同 vcf_search, 所有临时落子 try/finally 撤销。"""
     def rec(bd, dep):
         if dep<=0 or (_DEADLINE is not None and _tm.time()>_DEADLINE):
             return False
@@ -512,34 +566,37 @@ def _opponent_has_forcing_win(board, op, depth=6):
         if _winning_points(bd,op,_check=True): return True
         for (r,c) in _four_points(bd,op,_check=True):
             bd[r][c]=op
-            must=_winning_points(bd,op,_check=True)
-            distinct = set(must)
-            if len(distinct)>=2 and len(must)>=2:   # 双杀式冲四, 一子挡不完 -> 对方必胜
-                bd[r][c]=0
-                return True
-            if must:
-                # 逐个试挡所有成五点; 防守方(我方)的堵子若同时形成己方冲四, 对方连击链被打断
-                # -> 该冲四不成立(对称修复, 避免 C 路径误判对方有杀)
-                blocked_all=True
-                for br,bc in must:
-                    bd[br][bc]=3-op
-                    if win_points_after(bd, br, bc, 3-op):
-                        blocked_all=False; bd[br][bc]=0; break
-                    sub=rec(bd,dep-1)
-                    bd[br][bc]=0
-                    if not sub:
-                        blocked_all=False; break
-                bd[r][c]=0
-                if blocked_all: return True
-            else:
+            try:
+                must=_winning_points(bd,op,_check=True)
+                distinct = set(must)
+                if len(distinct)>=2 and len(must)>=2:   # 双杀式冲四, 一子挡不完 -> 对方必胜
+                    return True
+                if must:
+                    # 逐个试挡所有成五点; 防守方(我方)的堵子若同时形成己方冲四, 对方连击链被打断
+                    # -> 该冲四不成立(对称修复, 避免 C 路径误判对方有杀)
+                    blocked_all=True
+                    for br,bc in must:
+                        bd[br][bc]=3-op
+                        try:
+                            if win_points_after(bd, br, bc, 3-op):
+                                blocked_all=False; break
+                            sub=rec(bd,dep-1)
+                        finally:
+                            bd[br][bc]=0
+                        if not sub:
+                            blocked_all=False; break
+                    if blocked_all: return True
+            finally:
                 bd[r][c]=0
         return False
     for (r,c) in candidates(board):
         if _DEADLINE is not None and _tm.time()>_DEADLINE:
             break
         board[r][c]=op
-        w=rec(board,depth)
-        board[r][c]=0
+        try:
+            w=rec(board,depth)
+        finally:
+            board[r][c]=0
         if w: return True
     return False
 
@@ -551,9 +608,11 @@ def defensive_vct(board, my_side, op, cands):
     scored=[]
     for (r,c) in cands:
         board[r][c]=my_side
-        # 快速判断: 落子后对方是否仍有强制胜(浅一点, 省时)
-        still_deadly=_opponent_has_forcing_win(board, op, depth=4)
-        board[r][c]=0
+        try:
+            # 快速判断: 落子后对方是否仍有强制胜(浅一点, 省时)
+            still_deadly=_opponent_has_forcing_win(board, op, depth=4)
+        finally:
+            board[r][c]=0
         if not still_deadly:
             atk=line_scores(board,r,c,my_side)
             # 若该点还能堵住对方一个成五点, 加分(更稳)
@@ -643,9 +702,12 @@ def _book_lookup(board):
 
 def best_move(board, my_side):
     global _DEADLINE
+    _DEADLINE=None   # 全局状态卫生(防御): 上一手若异常穿出可能残留过期deadline, 入口清零
     # 关键: 深拷贝一份用于搜索, 绝不改动调用方传入的原board
     # (内部_search/vcf/defensive等会临时落子再撤销, 若中途超时异常会泄漏)
     board=[row[:] for row in board]
+    pristine=[row[:] for row in board]   # 干净快照: 搜索超时穿出时 board 可能有未撤销的临时落子,
+                                         # 结尾 reason 判读一律用本快照(与搜索前真实局面一致)
     # TT 改为"局内共享"(由 new_game 在开新局时清空), 不再每步清 -> 复用本局转置局面
     _init_eval(board)   # 初始化增量评估缓存(candidates/eval依赖它)
     empties=sum(row.count(0) for row in board)
@@ -700,7 +762,76 @@ def best_move(board, my_side):
     if bm is not None:
         return bm,"开局库强手（KataGomo离线分析）。"
 
+    # ---- 搜索共用设施(提前构造, E 与 G 共享): budget/根哈希/WIN_TH/必胜复核 ----
+    budget=2.0  # 秒/步 (历史: 8s→4s→2s; 编译+算法优化后 2s 即达旧 4s 的深度, A/B 12局 7:5 无损)
+    WIN_TH=E_WIN = 10**8   # 只有真实必胜(远高eval上限)才算; 由浅入深首个即最短胜法
+    root_hash=_full_hash(board)   # 根局面zobrist哈希, 落子时增量XOR更新
+    _vcount=[0]   # 每步复核次数上限(E+G 共享, 防成本叠加)
+    def _verify_win(mv, d):
+        """WIN_TH 复核+证伪值钳制(2026-10-07, 符号修复后升级)。negamax 约定:
+        _search(board, X, ...) 返回轮走方 X 视角价值, 勿再取负。
+        返回 (accept, bound):
+          accept=True  -> 全部对方应招都被证明挡不住(每步 v2 有 >=WIN_TH 的下界), 宣告最短胜;
+          accept=False -> bound=证伪值(真值上界): level1=全程 min / level2=超时前部分 min /
+                          bound=None -> 调用方按 level3 钳到 1e7(最坏诚实度)。
+        证伪值让幻觉着以诚实上界参与本层竞争, 而不是被弃用/顶格, 也避免假收敛。
+        定位声明(2026-10-08 审查会): accept="top-10 应招集全过+vd内杀穿"仍是候选集内验证,
+        与 E 二次实验的死因②共享同一剪枝偏差 —— 本守卫是降概率止血带非证明;
+        放行精确率实测=收割样本 12/12(95%置信上界约22%), 扩样是 ④ 的任务。"""
+        global _DEADLINE, _TT_ISOLATE
+        m=10**9   # 先于任何可超时代码定义(超时兜底引用它)
+        vr,vc=mv
+        info=_apply_move(board,vr,vc,my_side)
+        try:
+            if has_win_at(board,my_side,vr,vc): return True,None   # 直接成五, 无可辩驳
+            # 全宽: 对方立即成五 = 这手自杀 -> 钳到底
+            for r_ in range(SIZE):
+                for c_ in range(SIZE):
+                    if board[r_][c_]==0:
+                        board[r_][c_]=op
+                        bad=has_win_at(board,op,r_,c_)
+                        board[r_][c_]=0
+                        if bad: return False,-(10**9)
+            vd=max(2,d-2)   # 深度对齐: M(1)+应招(1)+vd = 主搜索 1+(d-1)
+            rh=root_hash^_ZOBRIST[vr*SIZE+vc][my_side]
+            replies=list(candidates(board))
+            replies.sort(key=lambda rc:-_PTS[rc[0]][rc[1]][op-1])  # 见证排序: 最强证伪先查, 利于窗口跳过
+            prev_nw=_TT_ISOLATE
+            prev_k=_KILLER[:]            # 旁路无残留(DECISIONS #13规则): killer/history 同属主搜索
+            prev_h1=_HIST[1][:]; prev_h2=_HIST[2][:]   # 状态, 复核期间的排序偏好不得泄漏回主搜索
+            _TT_ISOLATE=True   # 复核双向隔离: 不读主TT(避免复用被测子树自写的bound), 不写(防毒化)
+            try:
+                for (br,bc) in replies:
+                    info2=_apply_move(board,br,bc,op)
+                    try:
+                        if has_win_at(board,op,br,bc): return False,-(10**9)
+                        # 见证旁路: 对方应招后我方有立即成五(必为高威胁分, 在候选内) -> 该应招免费通过
+                        free=False
+                        for (er,ec) in candidates(board):
+                            board[er][ec]=my_side
+                            if has_win_at(board,my_side,er,ec): free=True
+                            board[er][ec]=0
+                            if free: break
+                        if free: continue
+                        # 窗口 (-1e9, min(m,WIN_TH)): 返回<beta 为精确值(更新m); >=beta 为下界(>=beta 即可证 v2>=m 或 >=WIN_TH, 跳过)
+                        beta = m if m < WIN_TH else WIN_TH
+                        v2=_search(board,my_side,vd,-10**9,beta,rh^_ZOBRIST[br*SIZE+bc][op])
+                        if v2 < beta: m=v2
+                    finally:
+                        _undo_move(board,info2)
+            finally:
+                _TT_ISOLATE=prev_nw
+                _KILLER[:]=prev_k; _HIST[1][:]=prev_h1; _HIST[2][:]=prev_h2
+            if m >= WIN_TH: return True,None   # 全部应招都有 >=WIN_TH 的下界
+            return False,m
+        except _Timeout:
+            return False,(m if m < WIN_TH else None)   # m 未定义兜底: 超时前无更新 -> None(level3)
+        finally:
+            _undo_move(board,info)
+
     # E. 我方 VCF 强制胜 -> 抢先杀
+    # (2026-10-07/08 两次开门实验均显著回退: 四点预检中盘高频命中致 vcf 白烧时间 +
+    #  候选集内可验证!=真胜(A/B 4:8 与 4:12)。E 保持休眠; 复活唯一前提=节点级威胁注入架构)
     if empties<=40:
         _DEADLINE=_tm.time()+0.5
         try:
@@ -716,14 +847,12 @@ def best_move(board, my_side):
         if double_win(board,r,c,my_side):
             return (r,c),"在这里能同时制造两个威胁，对方怎么挡都挡不住。"
 
-    # ---- 迭代加深搜索(用时间预算控制深度) ----
-    budget=2.0  # 秒/步 (历史: 8s→4s→2s; 编译+算法优化后 2s 即达旧 4s 的深度, A/B 12局 7:5 无损)
+    # ---- 迭代加深搜索(用时间预算控制深度; budget/复核设施已在 E 前构造) ----
     _DEADLINE=_tm.time()+budget
+    root_deadline=_DEADLINE
     final_best=None; final_bestv=-10**9
-    root_hash=_full_hash(board)   # 根局面zobrist哈希, 落子时增量XOR更新
     prev_best=None   # 上一次迭代的最优着法, 用于本层优先搜索(提升剪枝效率)
     prev_bestv=None  # 上一次迭代的最优分值(时间管理: 收敛判定用)
-    WIN_TH=E_WIN = 10**8   # 只有真实必胜(远高eval上限)才算; 由浅入深首个即最短胜法
     for d in (2,3,4,5,6,7,8):
         if _tm.time()>_DEADLINE:
             break
@@ -738,13 +867,34 @@ def best_move(board, my_side):
                     break
                 info=_apply_move(board,r,c,my_side)
                 nh=root_hash^_ZOBRIST[r*SIZE+c][my_side]
-                if has_win_at(board,my_side,r,c):
-                    _undo_move(board,info)
-                    cur=(r,c); curv=WIN_TH+d; break
-                # 根层传已找到的最佳值作为上界: child搜索窗口(-1e9, -cur) -> 兄弟候选可据此剪枝
-                v=-_search(board,op,d-1,-10**9,-curv,nh)
-                _undo_move(board,info)
-                if _DEADLINE is not None and _tm.time()>_DEADLINE:
+                try:
+                    win_now = has_win_at(board,my_side,r,c)
+                    if not win_now:
+                        v=-_search(board,op,d-1,-10**9,-curv,nh)
+                finally:
+                    _undo_move(board,info)   # 超时穿出同样必须撤销(#38根因)
+                if win_now:
+                    _DEADLINE=None
+                    return (r,c),"这一步能强制取胜（选的是最快赢的路径）！"   # 可判定: 直接成五
+                timedout = _DEADLINE is not None and _tm.time()>_DEADLINE
+                if v>=WIN_TH:
+                    # WIN_TH 是剪枝集内证据非证明 -> 立即复核; 被证伪时用证伪值(真值上界)
+                    # 参与本层竞争, 其余候选随之获得正常窗口
+                    if _vcount[0] >= 2 or timedout:
+                        v=10**7                       # level3: 无预算复核 -> 顶格(最坏诚实度)
+                    else:
+                        _vcount[0]+=1
+                        _DEADLINE=_tm.time()+min(0.9, budget*0.45)
+                        try:
+                            accept,bound=_verify_win((r,c), d)
+                        finally:
+                            _DEADLINE=root_deadline
+                        if accept:
+                            _DEADLINE=None
+                            # 文案带"复核通过"标记: 与守卫定位声明对齐(候选集内验证非数学证明)
+                            return (r,c),"这一步能强制取胜（复核通过，选的是最快赢的路径）！"
+                        v = bound if bound is not None else 10**7   # level1/2 降级, 超时未算->level3
+                if timedout:
                     # 该候选搜完已超时: 仍采纳其结果(若有), 但不再搜本层其余候选
                     if v>curv:
                         curv=v; cur=(r,c)
@@ -755,15 +905,11 @@ def best_move(board, my_side):
             pass
         if cur is not None:
             # 时间管理(提前收敛退出): 连续两次迭代选点相同且分值未剧烈波动 -> 局面已收敛,
-            # 无需烧满预算; 选点仍在翻转的困难局面自动用满 4 秒
+            # 无需烧满预算; 选点仍在翻转的困难局面自动用满预算
             converged = (curv < WIN_TH and d >= 4 and cur == prev_best
                          and prev_bestv is not None and abs(curv - prev_bestv) <= 2*10**6)
             final_best, final_bestv = cur, curv
             prev_best, prev_bestv = cur, curv
-            # ③最短胜法: 本层已确认必胜 -> 由浅到深首个即最短, 立即返回不再加深
-            if curv>=WIN_TH:
-                _DEADLINE=None
-                return cur,"这一步能强制取胜（选的是最快赢的路径）！"
             if converged:
                 _DEADLINE=None
                 break
@@ -772,7 +918,8 @@ def best_move(board, my_side):
     if best is None:
         best=(7,7)
     # 理由(基于新分级: LIVE4=1e6, FOUR=1e5, LIVE3=5e4)
-    a=threat(board,best[0],best[1],my_side); d=threat(board,best[0],best[1],op)
+    # 用 pristine 快照判读: 超时异常穿出时 board 残留脏子, 文案必须基于真实局面
+    a=threat(pristine,best[0],best[1],my_side); d=threat(pristine,best[0],best[1],op)
     if a>=LIVE4: reason="形成活四/双杀，对方挡不住了。"
     elif a>=FOUR: reason="冲四，逼对方必须应。"
     elif d>=LIVE4: reason="抢先占住能破坏对方活四/双杀的关键点。"

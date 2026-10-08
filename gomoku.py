@@ -29,6 +29,7 @@ MAIN = {"my_side": None, "turn": 1, "board": None, "running": False, "game_over"
 # ---- 对局日志: 每局一个文件(文档\五子棋对局助手日志\), 记录每手棋+引擎理由+终局盘面, 便于事后诊断 ----
 LOG_DIR = os.path.join(os.path.expanduser("~"), "Documents", "五子棋对局助手日志")
 _LOGF = None
+ENGINE_VER = "2026-10-08B2 (修复延伸口成五点误判FOUR致漏堵五: 实战复盘case)"   # 每次引擎/GUI 行为变更时更新
 
 def _log(msg):
     """追加一条日志; 任何日志失败都不影响对局。"""
@@ -38,6 +39,12 @@ def _log(msg):
             os.makedirs(LOG_DIR, exist_ok=True)
             _LOGF = open(os.path.join(LOG_DIR, "对局_%s.log" % _time.strftime("%Y%m%d_%H%M%S")),
                          "a", encoding="utf-8")
+            # 版本戳(教训: dp2 归因绕两轮因日志无引擎版本): 新日志首行写明版本+编译状态
+            try:
+                _LOGF.write("[version] %s | compiled=%s\n" %
+                            (ENGINE_VER, bool(getattr(E, "__compiled__", None))))
+            except Exception:
+                pass
         _LOGF.write("[%s] %s\n" % (_time.strftime("%H:%M:%S"), msg))
         _LOGF.flush()
     except Exception:
@@ -230,10 +237,10 @@ class Board:
         """在主线程应用程序应手。"""
         MAIN["busy"]=False
         my=MAIN["my_side"]
+        b=MAIN["board"]   # 提前定义: 修复引擎异常路径上 _board_str(b) 的 NameError(静默失败+盘面错位)
         if move is None:
             _log("无着可下(满盘/异常), 平局。终局盘面:\n%s" % _board_str(b))
             self.set_status("棋盘已满/异常，平局。点击棋盘可开始下一局。"); self.finish(); return
-        b=MAIN["board"]
         b[move[0]][move[1]]=my
         MAIN["turn"]+=1
         _log("我方应手 (%d,%d) 理由: %s" % (move[0], move[1], reason))
